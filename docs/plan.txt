@@ -1,0 +1,218 @@
+import React from 'react';
+
+const markdownContent = `# Concept Pro Connect: Local WebRTC POC with TURN Fallback
+
+**Document Version:** 1.0 (Local Development)
+**Objective:** Establish a multi-machine WebRTC signaling and media pipeline on a local network, explicitly including a local TURN relay server to test symmetric NAT fallback logic before AWS deployment.
+
+---
+
+## 1. Local Architecture Overview
+
+Instead of deploying to AWS EC2 and RDS, the core infrastructure runs on a single **Host Machine** using Docker. Other PCs on the local network connect via secure Ngrok tunnels and the local LAN.
+
+*   **Identity:** Amazon Cognito (Free Tier)
+*   **Database:** PostgreSQL (Docker)
+*   **Pub/Sub:** Redis (Docker)
+*   **Signaling Gateway:** NestJS running locally (Port 3001) + Ngrok
+*   **Frontend SPA:** React/Vue dev server locally (Port 3000) + Ngrok
+*   **STUN/TURN Relay:** Coturn (Docker)
+
+---
+
+## 2. Infrastructure Setup (Docker Compose)
+
+To test TURN routing locally, you must run an instance of Coturn alongside your databases. Create a \`docker-compose.yml\` file on your Host Machine:
+
+\`\`\`yaml
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: secretpassword
+      POSTGRES_DB: concept_pro
+    ports:
+      - "5432:5432"
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  coturn:
+    image: coturn/coturn
+    network_mode: "host" # Required to map UDP relay ports directly to the local LAN
+    command: >
+      --realm=webrtc-poc.local
+      --user=poc_user:poc_password
+      --listening-port=3478
+      --min-port=49152
+      --max-port=49200
+      --verbose
+\`\`\`
+
+Run \`docker-compose up -d\` to start the infrastructure.
+
+---
+
+## 3. Network Configuration & Ngrok
+
+Because WebRTC APIs (\`RTCPeerConnection\`, \`getUserMedia\`) require a secure context, you must expose your local NestJS and React servers using HTTPS tunnels.
+
+1.  **Start your NestJS Server** on port 3001.
+2.  **Start your Frontend SPA** on port 3000.
+3.  **Create Secure Tunnels:**
+    \`\`\`bash
+    ngrok http 3001 # API & Signaling (e.g., https://api-xyz.ngrok.app)
+    ngrok http 3000 # Frontend (e.g., https://web-xyz.ngrok.app)
+    \`\`\`
+4.  **Update Environment Variables:** Ensure your React app points to \`wss://api-xyz.ngrok.app/signaling\` and update your Cognito App Client Allowed Callback URLs with \`https://web-xyz.ngrok.app\`.
+
+---
+
+## 4. WebRTC Configuration (Testing the TURN Fallback)
+
+To prove that the TURN server works locally, you must configure the frontend to interact with the Docker Coturn instance.
+
+### Standard Configuration (Prefers LAN)
+In normal operation, WebRTC will discover the local \`192.168.x.x\` addresses and use them, bypassing the TURN server entirely.
+
+\`\`\`javascript
+// Replace 192.168.1.50 with the actual LAN IP of your Host Machine
+const configuration = {
+  iceServers: [
+    { 
+      urls: 'turn:192.168.1.50:3478', 
+      username: 'poc_user', 
+      credential: 'poc_password' 
+    }
+  ],
+  iceTransportPolicy: 'all' // Tests Host, STUN, and TURN paths
+};
+const peerConnection = new RTCPeerConnection(configuration);
+\`\`\`
+
+### Force-Testing the TURN Relay
+To verify your application correctly handles symmetric NAT scenarios where direct P2P is blocked, you can force the WebRTC engine to **only** use the TURN relay.
+
+\`\`\`javascript
+const forceTurnConfiguration = {
+  iceServers: [
+    { 
+      urls: 'turn:192.168.1.50:3478', 
+      username: 'poc_user', 
+      credential: 'poc_password' 
+    }
+  ],
+  // This explicitly disables local LAN connections and forces the video 
+  // to bounce through the Docker Coturn container.
+  iceTransportPolicy: 'relay' 
+};
+const peerConnection = new RTCPeerConnection(forceTurnConfiguration);
+\`\`\`
+
+---
+
+## 5. Testing Protocol
+
+1.  **Host Machine (192.168.1.50):** Runs Docker Compose, NestJS, React, and Ngrok.
+2.  **PC 2 (NVR Simulator):** Open \`https://web-xyz.ngrok.app/simulator\`. This connects to the signaling WebSocket and captures the webcam to act as the NVR stream.
+3.  **PC 3 (Client Browser):** Open \`https://web-xyz.ngrok.app\`. Log in via Cognito. Request the stream.
+4.  **Validation:** 
+    *   Open \`chrome://webrtc-internals\` on PC 3. 
+    *   Look at the active ICE candidate pair. 
+    *   If \`iceTransportPolicy\` is \`all\`, the connection type should be \`host\` (direct local LAN).
+    *   If \`iceTransportPolicy\` is \`relay\`, the connection type should be \`relay\`, confirming the video is successfully passing through your local Coturn Docker container.
+`;
+
+export default function DocumentDownloader() {
+  const handleDownload = () => {
+    // Create a Blob containing the markdown content
+    const blob = new Blob([markdownContent], { type: 'text/markdown' });
+    
+    // Create a temporary URL for the Blob
+    const url = URL.createObjectURL(blob);
+    
+    // Create a temporary anchor element
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'webrtc-poc-architecture.md';
+    
+    // Programmatically click the anchor to trigger the download
+    document.body.appendChild(a);
+    a.click();
+    
+    // Cleanup
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  return (
+    <div style={{
+      fontFamily: 'system-ui, -apple-system, sans-serif',
+      padding: '40px 20px',
+      maxWidth: '600px',
+      margin: '0 auto',
+      textAlign: 'center',
+      backgroundColor: '#f8fafc',
+      borderRadius: '12px',
+      boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)'
+    }}>
+      <h2 style={{ 
+        color: '#1e293b', 
+        marginBottom: '12px',
+        fontSize: '24px'
+      }}>
+        Concept Pro Architecture Docs
+      </h2>
+      <p style={{ 
+        color: '#64748b', 
+        marginBottom: '24px',
+        lineHeight: '1.5'
+      }}>
+        Click the button below to download the complete WebRTC Local POC Markdown file directly to your machine.
+      </p>
+      
+      <button 
+        onClick={handleDownload}
+        style={{
+          backgroundColor: '#3b82f6',
+          color: 'white',
+          border: 'none',
+          padding: '12px 24px',
+          borderRadius: '8px',
+          fontSize: '16px',
+          fontWeight: '600',
+          cursor: 'pointer',
+          transition: 'background-color 0.2s',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          gap: '8px',
+          margin: '0 auto'
+        }}
+        onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#2563eb'}
+        onMouseOut={(e) => e.currentTarget.style.backgroundColor = '#3b82f6'}
+      >
+        <svg 
+          width="20" 
+          height="20" 
+          viewBox="0 0 24 24" 
+          fill="none" 
+          stroke="currentColor" 
+          strokeWidth="2" 
+          strokeLinecap="round" 
+          strokeLinejoin="round"
+        >
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+          <polyline points="7 10 12 15 17 10" />
+          <line x1="12" y1="15" x2="12" y2="3" />
+        </svg>
+        Download Architecture Docs
+      </button>
+    </div>
+  );
+}

@@ -1,0 +1,69 @@
+services:
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: secretpassword
+      POSTGRES_DB: concept_pro
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin -d concept_pro"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # On Linux, prefer network_mode: host for Coturn UDP relay.
+  # On Docker Desktop (Windows/Mac), published ports + TURN_EXTERNAL_IP work better.
+  coturn:
+    image: coturn/coturn
+    network_mode: host
+    environment:
+      DETECT_EXTERNAL_IP: "yes"
+    command: >
+      --realm=webrtc-poc.local
+      --user=poc_user:poc_password
+      --listening-port=3478
+      --min-port=49152
+      --max-port=49200
+      --verbose
+      --no-cli
+      --no-tls
+      --no-dtls
+    profiles:
+      - linux-host
+
+  coturn-bridge:
+    image: coturn/coturn
+    ports:
+      - "3478:3478"
+      - "3478:3478/udp"
+      - "49152-49200:49152-49200/udp"
+    environment:
+      DETECT_EXTERNAL_IP: "yes"
+    command: >
+      --realm=webrtc-poc.local
+      --user=poc_user:poc_password
+      --listening-port=3478
+      --min-port=49152
+      --max-port=49200
+      --external-ip=${TURN_EXTERNAL_IP:-127.0.0.1}
+      --verbose
+      --no-cli
+      --no-tls
+      --no-dtls
+
+volumes:
+  postgres_data:
